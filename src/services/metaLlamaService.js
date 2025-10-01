@@ -87,6 +87,44 @@ class MetaLlamaService {
     };
   }
 
+  // FlowSurf.AI style node code generation with PRD + Code
+  async generateNodeCode(prompt, payload) {
+    const { nodeTitle, nodeDescription, nodeType, codeOptions } = payload;
+    
+    const enhancedPrompt = this.buildNodeCodePrompt(prompt, payload);
+    
+    const parameters = {
+      max_tokens: 6000, // Large enough for PRD + multiple files
+      temperature: 0.4, // Balanced creativity/consistency for PRD + Code
+      top_p: 0.9
+    };
+
+    logger.info(`Meta Llama: Generating node code for ${nodeTitle}`);
+    
+    const result = await this.makeRequest(
+      this.models.codeGeneration, // Use CodeLlama for best code quality
+      enhancedPrompt,
+      parameters
+    );
+
+    return {
+      data: result.generated_text,
+      fullResponse: result.generated_text,
+      nodeTitle,
+      nodeType,
+      language: codeOptions?.language || 'typescript',
+      metadata: {
+        ...result.metadata,
+        requestType: 'node-code',
+        nodeContext: {
+          title: nodeTitle,
+          type: nodeType,
+          description: nodeDescription
+        }
+      }
+    };
+  }
+
   // Generate comprehensive PRDs with large model
   async generateComprehensivePRD(projectIdea, industry = 'tech', targetAudience = 'general') {
     const prompt = this.buildPRDPrompt(projectIdea, industry, targetAudience);
@@ -185,6 +223,75 @@ Please provide complete, working code with:
 2. Clear comments
 3. Best practices
 4. Type definitions (if applicable)
+<|im_end|>
+
+<|im_start|>assistant`;
+  }
+
+  buildNodeCodePrompt(originalPrompt, payload) {
+    const { nodeTitle, nodeDescription, nodeType, projectContext, codeOptions } = payload;
+    
+    return `<|im_start|>system
+You are a senior software architect and product manager with DUAL EXPERTISE:
+1. Product Requirements Documentation (PRD) creation
+2. Production-ready code generation
+
+Your task is to generate BOTH comprehensive PRD documentation AND complete functional code for each file you create.
+
+MANDATORY REQUIREMENTS:
+- Every file MUST include detailed PRD documentation
+- Every file MUST contain complete, production-ready code (50+ lines minimum)
+- PRD must cover: Purpose, Requirements, User Stories, Acceptance Criteria, Technical Specs
+- Code must include proper TypeScript interfaces, error handling, and styling
+- NO placeholder code, TODO comments, or incomplete implementations
+<|im_end|>
+
+<|im_start|>user
+${originalPrompt}
+
+PROJECT CONTEXT:
+- Component: ${nodeTitle}
+- Description: ${nodeDescription}
+- Type: ${nodeType}
+- Project: ${projectContext?.name || 'Web Application'}
+- Tech Stack: ${JSON.stringify(projectContext?.techStack || ['React', 'TypeScript', 'Tailwind CSS'])}
+- Framework: ${codeOptions?.framework || 'nextjs'}
+- Language: ${codeOptions?.language || 'typescript'}
+
+EXPECTED OUTPUT FORMAT:
+Please structure your response as follows for each file:
+
+## Product Requirements Document (PRD)
+### File: [FileName.tsx]
+**Purpose**: [What this file does and why it exists]
+
+**Requirements**:
+- [Functional requirement 1]
+- [Functional requirement 2]
+- [Technical requirement 1]
+
+**User Stories**:
+- As a [user type], I want to [action] so that [benefit]
+
+**Acceptance Criteria**:
+- [Criteria 1]
+- [Criteria 2]
+
+**Technical Specifications**:
+- Built with React and TypeScript
+- Uses Tailwind CSS for styling
+- Proper prop interfaces and error handling
+
+**Dependencies**:
+- react, @types/react, tailwindcss
+
+## Implementation Code
+
+\`\`\`${codeOptions?.language || 'typescript'}
+[COMPLETE PRODUCTION-READY CODE HERE - NO PLACEHOLDERS]
+\`\`\`
+
+Generate 1-3 files as needed for a complete implementation.
 <|im_end|>
 
 <|im_start|>assistant`;
