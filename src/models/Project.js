@@ -14,6 +14,18 @@ const ProjectSchema = new mongoose.Schema({
     required: true,
     maxLength: 500
   },
+
+  // Project features from frontend form
+  features: {
+    type: mongoose.Schema.Types.Mixed, // Object with feature categories and arrays
+    default: {}
+  },
+
+  // Tech stack from frontend form
+  techStack: {
+    type: [String],
+    default: []
+  },
   
   // Project configuration
   type: {

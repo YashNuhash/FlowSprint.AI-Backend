@@ -72,6 +72,9 @@ class EnhancedMcpGateway {
         case 'code':
           result = await this.routeCodeRequest(payload, options);
           break;
+        case 'node-code':
+          result = await this.routeNodeCodeRequest(payload, options);
+          break;
         case 'prd':
           result = await this.routePRDRequest(payload, options);
           break;
@@ -102,20 +105,186 @@ class EnhancedMcpGateway {
 
   // Smart mindmap routing: Cerebras first (speed), then OpenRouter with Llama 4
   async routeMindmapRequest(payload, options) {
-    const { projectDescription, priority = 'speed' } = payload;
+    const { prompt, projectDescription, priority = 'speed' } = payload;
+    const description = prompt || projectDescription;
     
     if (priority === 'speed' && this.isServiceHealthy('cerebras')) {
       try {
-        const result = await cerebrasService.generateMindmapUltraFast(projectDescription, options);
-        return { ...result, provider: 'cerebras', model: 'llama3.1-8b' };
+        logger.info('🚀 MCP Gateway: Using Cerebras for ultra-fast mindmap generation');
+        const rawResult = await cerebrasService.generateMindmapUltraFast(description, options);
+        
+        // Extract content from Cerebras API response format
+        const content = rawResult.choices?.[0]?.message?.content;
+        if (!content) {
+          throw new Error('No content in Cerebras response');
+        }
+        
+        // Try to parse as JSON, fallback to text parsing if needed
+        let mindmapData;
+        try {
+          mindmapData = JSON.parse(content);
+        } catch (parseError) {
+          logger.warn('Cerebras returned non-JSON, attempting text parsing...');
+          // Basic text-to-mindmap conversion
+          mindmapData = this.parseTextToMindmap(content);
+        }
+        
+        logger.info('✅ MCP Gateway: Cerebras mindmap parsed successfully', {
+          contentLength: content.length,
+          hasNodes: !!mindmapData.nodes,
+          nodeCount: mindmapData.nodes?.length || 0
+        });
+        
+        return { 
+          data: mindmapData, 
+          provider: 'cerebras', 
+          model: 'llama3.1-8b',
+          responseTime: rawResult.metadata?.responseTime
+        };
       } catch (error) {
-        logger.warn('Cerebras mindmap failed, falling back to OpenRouter');
+        logger.warn('Cerebras mindmap failed, falling back to OpenRouter:', error.message);
       }
     }
     
     // Fallback to OpenRouter with Llama 4 Scout (free)
-    const result = await openRouterService.generateMindmap(projectDescription, options);
+    logger.info('🔄 MCP Gateway: Falling back to OpenRouter for mindmap generation');
+    const result = await openRouterService.generateMindmap(description, options);
     return { ...result, provider: 'openrouter', model: 'llama-4-scout' };
+  }
+
+  // Helper function to convert text response to mindmap tree structure
+  parseTextToMindmap(content) {
+    // Parse lines and organize into hierarchical structure
+    const lines = content.split('\n').filter(line => line.trim());
+    const children = [];
+    let nodeId = 1;
+    
+    // Group lines by sections/phases
+    let currentSection = null;
+    const sections = [];
+    
+    for (const line of lines) {
+      let trimmed = line.trim();
+      if (!trimmed || trimmed.length < 5) continue;
+      
+      // Skip meta-text lines
+      if (trimmed.toLowerCase().includes('here is a') || 
+          trimmed.toLowerCase().includes('this mindmap') ||
+          trimmed.toLowerCase().includes('detailed technical development') ||
+          trimmed.toLowerCase().includes('comprehensive roadmap')) {
+        continue;
+      }
+      
+      // Clean title: remove markdown formatting
+      const cleanTitle = this.cleanNodeTitle(trimmed);
+      if (!cleanTitle || cleanTitle.length < 3) continue;
+      
+      // Generate meaningful description
+      const description = this.generateMeaningfulDescription(cleanTitle);
+      
+      // Detect section headers (SETUP, DEVELOPMENT, etc.)
+      if (trimmed.match(/^[A-Z\s]+:/) || trimmed.includes('PHASE') || trimmed.includes('SETUP') || trimmed.includes('DEVELOPMENT')) {
+        if (currentSection) sections.push(currentSection);
+        currentSection = {
+          id: `section_${sections.length + 1}`,
+          text: cleanTitle,
+          title: cleanTitle,
+          description: description,
+          type: 'milestone',
+          children: []
+        };
+      } else if (currentSection) {
+        // Add task to current section
+        currentSection.children.push({
+          id: `node_${nodeId++}`,
+          text: cleanTitle,
+          title: cleanTitle,
+          description: description,
+          type: this.determineTaskType(cleanTitle)
+        });
+      } else {
+        // Standalone task
+        children.push({
+          id: `node_${nodeId++}`,
+          text: cleanTitle,
+          title: cleanTitle,
+          description: description,
+          type: nodeId <= 3 ? 'start' : this.determineTaskType(cleanTitle)
+        });
+      }
+    }
+    
+    // Add final section
+    if (currentSection) sections.push(currentSection);
+    
+    // If we have sections, use them as children
+    if (sections.length > 0) {
+      children.push(...sections);
+    }
+    
+    // Create root tree structure
+    return {
+      id: 'root',
+      text: 'Project Development Roadmap',
+      title: 'Project Development Roadmap', 
+      description: 'Comprehensive technical development roadmap with detailed implementation tasks and milestones',
+      type: 'start',
+      children: children.length > 0 ? children : [
+        {
+          id: 'node_1',
+          text: 'Development tasks generated from AI',
+          title: 'Development tasks generated from AI',
+          description: 'AI-generated development tasks and technical implementation details',
+          type: 'task'
+        }
+      ]
+    };
+  }
+
+  // Clean node titles - remove markdown and formatting
+  cleanNodeTitle(text) {
+    return text
+      .replace(/^\*\*|\*\*$/g, '') // Remove bold markdown (**text**)
+      .replace(/^[-*•]\s*/, '') // Remove bullet points
+      .replace(/^\d+\.\s*/, '') // Remove numbering (1. 2.)
+      .replace(/^#+\s*/, '') // Remove headers (# ##)
+      .replace(/^[A-Z\s]+:\s*/, '') // Remove "PHASE:" patterns
+      .replace(/[*_]{1,2}/g, '') // Remove remaining markdown
+      .trim();
+  }
+
+  // Generate meaningful descriptions instead of "title: Implementation and technical details"
+  generateMeaningfulDescription(title) {
+    const lowerTitle = title.toLowerCase();
+    
+    if (lowerTitle.includes('setup') || lowerTitle.includes('initialize')) {
+      return `Configure and set up ${title.toLowerCase()}, including necessary dependencies, environment variables, and initial configuration`;
+    } else if (lowerTitle.includes('implement') || lowerTitle.includes('develop') || lowerTitle.includes('create')) {
+      return `Build and implement ${title.toLowerCase()}, including core functionality, error handling, validation, and integration`;
+    } else if (lowerTitle.includes('test') || lowerTitle.includes('testing')) {
+      return `Write comprehensive tests for ${title.toLowerCase()}, including unit tests, integration tests, and validation scenarios`;
+    } else if (lowerTitle.includes('deploy') || lowerTitle.includes('deployment')) {
+      return `Deploy and configure ${title.toLowerCase()} in production environment with monitoring, logging, and performance optimization`;
+    } else if (lowerTitle.includes('database') || lowerTitle.includes('schema')) {
+      return `Design and implement ${title.toLowerCase()}, including data models, relationships, indexes, and migration scripts`;
+    } else if (lowerTitle.includes('api') || lowerTitle.includes('endpoint')) {
+      return `Develop ${title.toLowerCase()} with proper routing, validation, authentication, rate limiting, and error responses`;
+    } else if (lowerTitle.includes('component') || lowerTitle.includes('ui')) {
+      return `Build ${title.toLowerCase()} with responsive design, proper state management, accessibility, and user interactions`;
+    } else {
+      return `Complete the technical implementation of ${title.toLowerCase()} with proper integration, testing, and documentation`;
+    }
+  }
+
+  // Determine appropriate task type based on content
+  determineTaskType(title) {
+    const lowerTitle = title.toLowerCase();
+    
+    if (lowerTitle.includes('deploy') || lowerTitle.includes('launch') || lowerTitle.includes('production')) return 'end';
+    if (lowerTitle.includes('milestone') || lowerTitle.includes('phase') || lowerTitle.includes('mvp')) return 'milestone';
+    if (lowerTitle.includes('component') || lowerTitle.includes('ui') || lowerTitle.includes('frontend')) return 'component';
+    
+    return 'task';
   }
 
   // Code routing: Meta Llama first (quality), then OpenRouter with Llama 4
@@ -134,6 +303,53 @@ class EnhancedMcpGateway {
     // Fallback to OpenRouter with Llama 4 Maverick (free)
     const result = await openRouterService.generateCode(requirements, language, options);
     return { ...result, provider: 'openrouter', model: 'llama-4-maverick' };
+  }
+
+  // Node Code routing: FlowSurf.AI style PRD + Code generation
+  async routeNodeCodeRequest(payload, options) {
+    const { prompt, nodeTitle, complexity = 'medium' } = payload;
+    
+    logger.info(`Routing node code request for: ${nodeTitle}`);
+    logger.info(`Complexity: ${complexity}`);
+    
+    // First try Meta Llama for highest quality PRD + Code generation
+    if (this.isServiceHealthy('meta-llama') && complexity !== 'low') {
+      try {
+        logger.info('🎯 MCP Gateway: Using Meta Llama for node code generation');
+        const result = await metaLlamaService.generateNodeCode(prompt, payload);
+        return { ...result, provider: 'meta-llama', model: 'llama-4-scout' };
+      } catch (error) {
+        logger.warn('Meta Llama node code generation failed, falling back to OpenRouter:', error.message);
+      }
+    }
+    
+    // Fallback to OpenRouter with enhanced prompt for PRD + Code
+    logger.info('🔄 MCP Gateway: Using OpenRouter for node code generation');
+    const enhancedPrompt = this.enhanceNodeCodePrompt(prompt, payload);
+    const result = await openRouterService.generateCode(enhancedPrompt, payload.codeOptions?.language || 'typescript', {
+      ...options,
+      includePRD: true,
+      nodeContext: payload
+    });
+    
+    return { ...result, provider: 'openrouter', model: 'llama-4-maverick' };
+  }
+
+  // Helper method to enhance prompt for better PRD + Code generation
+  enhanceNodeCodePrompt(originalPrompt, payload) {
+    const { nodeTitle, nodeDescription, nodeType, projectContext, codeOptions } = payload;
+    
+    return `${originalPrompt}
+
+🚨 CRITICAL REQUIREMENTS:
+1. Generate BOTH comprehensive PRD documentation AND production-ready code
+2. PRD must include: Purpose, Requirements, User Stories, Acceptance Criteria, Technical Specs
+3. Code must be complete, functional, and ready for production use
+4. Format response as structured JSON if possible with separate "prd" and "code" fields for each file
+5. Include proper TypeScript interfaces, error handling, and responsive design
+6. Follow ${projectContext?.name || 'modern web'} application patterns and conventions
+
+Return multiple files if needed (component + styles + tests), each with its own PRD section.`;
   }
 
   // PRD routing: Meta Llama for comprehensive, OpenRouter for standard

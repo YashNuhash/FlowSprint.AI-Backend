@@ -152,6 +152,124 @@ class AIController {
     }
   }
 
+  // POST /api/v1/ai/generate-node-code - FlowSurf.AI style PRD + Code generation
+  async generateNodeCode(req, res) {
+    const startTime = Date.now();
+    
+    try {
+      const { 
+        nodeId,
+        nodeTitle,
+        nodeDescription,
+        nodeType = 'component',
+        projectContext = {},
+        codeOptions = {}
+      } = req.body;
+
+      if (!nodeTitle || !nodeDescription) {
+        return res.status(400).json({
+          success: false,
+          error: 'Node title and description are required',
+          code: 'MISSING_NODE_DATA'
+        });
+      }
+
+      logger.info(`Generating PRD + Code for node: ${nodeTitle}`);
+
+      // Create comprehensive prompt for PRD + Code generation
+      const nodeCodePrompt = `Generate comprehensive PRD documentation and production-ready code files for: ${nodeTitle}
+
+Description: ${nodeDescription}
+Node Type: ${nodeType}
+Project: ${projectContext.name || 'Web Application'}
+Features: ${JSON.stringify(projectContext.features || {})}
+Tech Stack: ${JSON.stringify(projectContext.techStack || ['React', 'TypeScript', 'Tailwind CSS'])}
+
+Code Options:
+- Framework: ${codeOptions.framework || 'nextjs'}
+- Language: ${codeOptions.language || 'typescript'}
+- Styling: ${codeOptions.styling || 'tailwind'}
+
+Generate 1-3 production-ready files with BOTH comprehensive PRD documentation AND complete functional code for each file.`;
+
+      // Use MCP Gateway for intelligent routing
+      const result = await enhancedMcpGateway.routeRequest('node-code', {
+        prompt: nodeCodePrompt,
+        nodeTitle,
+        nodeDescription,
+        nodeType,
+        projectContext,
+        codeOptions,
+        complexity: projectContext.complexity || 'medium'
+      });
+
+      const responseTime = Date.now() - startTime;
+
+      // Parse the response to extract structured files with PRD + Code
+      let parsedFiles;
+      try {
+        const rawContent = result.data || result.choices?.[0]?.message?.content || result.generated_text || result.code;
+        parsedFiles = [{
+          name: this.generateFileName(nodeTitle, codeOptions.language || 'typescript', 0),
+          path: `src/components/${this.generateFileName(nodeTitle, codeOptions.language || 'typescript', 0)}`,
+          content: this.cleanCodeResponse(rawContent, codeOptions.language || 'typescript'),
+          language: codeOptions.language || 'typescript',
+          type: nodeType,
+          description: `${nodeType} implementation for ${nodeTitle}`,
+          prd: this.generateDefaultPRD(nodeTitle, nodeType, this.generateFileName(nodeTitle, codeOptions.language || 'typescript', 0))
+        }];
+      } catch (parseError) {
+        logger.error('Failed to parse code generation response:', parseError);
+        throw new Error('Failed to parse AI response');
+      }
+
+      if (!parsedFiles || parsedFiles.length === 0) {
+        throw new Error('No files were generated from the AI response');
+      }
+
+      res.json({
+        success: true,
+        data: {
+          files: parsedFiles,
+          nodeId,
+          nodeTitle,
+          nodeType,
+          provider: result.provider,
+          summary: `Generated ${parsedFiles.length} files with PRD documentation and code for ${nodeTitle}`,
+          dependencies: ['react', '@types/react', 'tailwindcss']
+        },
+        metadata: {
+          responseTime,
+          provider: result.provider,
+          model: result.model || 'unknown',
+          timestamp: new Date().toISOString(),
+          fallback: result.fallback || false,
+          filesGenerated: parsedFiles.length
+        }
+      });
+
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      logger.error('Node code generation failed:', {
+        error: error.message,
+        nodeTitle: req.body.nodeTitle,
+        nodeType: req.body.nodeType,
+        responseTime
+      });
+
+      res.status(500).json({
+        success: false,
+        error: 'Failed to generate node code',
+        message: error.message,
+        code: 'NODE_CODE_GENERATION_FAILED',
+        metadata: {
+          responseTime,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+  }
+
   // POST /api/v1/ai/generate-prd
   async generatePRD(req, res) {
     const startTime = Date.now();
@@ -385,6 +503,11 @@ class AIController {
   }
 
   structurePRDResponse(content) {
+    // Ensure content is a string
+    if (typeof content !== 'string') {
+      content = String(content || '');
+    }
+    
     const sections = [];
     const lines = content.split('\n');
     let currentSection = null;
@@ -415,6 +538,73 @@ class AIController {
       totalSections: sections.length
     };
   }
+
+  // Helper methods for node code generation
+  generateFileName(nodeTitle, language, index) {
+    const cleanTitle = nodeTitle
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join('');
+    
+    const extension = this.getFileExtension(language);
+    const suffix = index > 0 ? `${index + 1}` : '';
+    
+    return `${cleanTitle}${suffix}.${extension}`;
+  }
+
+  getFileExtension(language) {
+    const extensions = {
+      'typescript': 'tsx',
+      'javascript': 'jsx',
+      'python': 'py',
+      'java': 'java',
+      'html': 'html',
+      'css': 'css',
+      'json': 'json',
+      'markdown': 'md'
+    };
+    
+    return extensions[language.toLowerCase()] || 'txt';
+  }
+
+  generateDefaultPRD(nodeTitle, nodeType, fileName) {
+    return `# Product Requirements Document (PRD)
+
+## File: ${fileName}
+**Purpose**: This ${nodeType} implements ${nodeTitle} functionality within the application.
+
+## Requirements
+- Display ${nodeTitle} information clearly
+- Accept configurable props for customization  
+- Render children components when provided
+- Maintain responsive design across devices
+- Handle empty states gracefully
+
+## User Stories
+- As a user, I want to see ${nodeTitle} information clearly presented
+- As a developer, I want to customize the component through props
+- As a designer, I want consistent styling across the application
+
+## Acceptance Criteria
+- Component renders without errors
+- Props are properly typed and documented
+- Responsive design works on mobile and desktop
+- Component follows accessibility best practices
+
+## Technical Specifications
+- Built with React and TypeScript for type safety
+- Uses Tailwind CSS for styling consistency
+- Follows component composition patterns
+- Implements proper prop interfaces
+- Supports className customization
+
+## Dependencies
+- React (^18.0.0)
+- TypeScript (^5.0.0)
+- Tailwind CSS (^3.0.0)`;
+  }
 }
 
-module.exports = new AIController();
+const aiController = new AIController();
+module.exports = aiController;

@@ -39,24 +39,67 @@ class CerebrasService {
     }
   }
 
-  // Ultra-fast mindmap generation (primary use case for Cerebras)
+  // Ultra-fast detailed mindmap generation (primary use case for Cerebras)
   async generateMindmapUltraFast(projectDescription, options = {}) {
     const messages = [
       {
         role: 'system',
-        content: 'You are a rapid project structuring AI. Create a concise mindmap in JSON format with main branches and sub-branches. Be fast and efficient while maintaining quality.'
+        content: `You are a rapid technical architect. Generate a detailed technical development mindmap with clean, actionable tasks.
+
+CRITICAL FORMATTING RULES:
+- Each node title: Plain text only (NO markdown, NO bold, NO asterisks)
+- Node titles: 3-8 words maximum, specific and actionable
+- Node descriptions: Practical implementation details (NOT "title + generic text")
+- Avoid meta-text like "Here is a mindmap" or "This project"
+- Strip all markdown formatting from titles
+
+GOOD NODE EXAMPLES:
+Title: "Setup MongoDB Atlas cluster"
+Description: "Create database cluster, configure authentication, set connection strings in environment variables"
+
+Title: "Implement JWT authentication" 
+Description: "Create login endpoint, generate tokens, add middleware for protected routes, handle token refresh"
+
+BAD NODE EXAMPLES:
+Title: "**Setup Phase**" (has markdown)
+Title: "Here is the authentication system" (meta-text)
+Description: "Implement JWT authentication: Implementation and technical details" (redundant)
+
+Focus on: setup → development → testing → deployment → maintenance phases.`
       },
       {
         role: 'user',
-        content: `Quick mindmap for project: ${projectDescription}`
+        content: `${projectDescription}
+
+Generate a comprehensive technical development mindmap with specific implementation tasks covering:
+
+SETUP PHASE:
+- Repository setup with proper .gitignore, README, and CI/CD pipeline
+- Development environment configuration with package managers and tools
+- Database schema design and connection setup
+
+DEVELOPMENT PHASE:
+- Authentication system implementation (registration, login, JWT, password reset)
+- Backend API development with CRUD operations and validation
+- Frontend component architecture with reusable UI elements
+- State management and data flow implementation
+- Real-time features and integrations
+
+TESTING & DEPLOYMENT:
+- Unit testing for components and API endpoints
+- Integration testing for user workflows
+- Production deployment with monitoring and logging
+- Performance optimization and scaling strategies
+
+Each node should be specific, actionable task with clear deliverables and technical details.`
       }
     ];
 
     const startTime = Date.now();
     const result = await this.makeRequest('/chat/completions', {
       messages,
-      temperature: 0.6,
-      max_tokens: 1200,
+      temperature: 0.7,
+      max_tokens: 2500,
       ...options
     }, 'llama3.1-8b');
 

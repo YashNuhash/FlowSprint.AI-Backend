@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: flowsprint-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: CORS_ORIGIN
+        fromService:
+          type: web
+          name: flowsprint-frontend
+          property: url
+      - key: MONGODB_URI
+        sync: false  # Set this manually in Render dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: OPENROUTER_API_KEY
+        sync: false  # Set this manually in Render dashboard
+      - key: CEREBRAS_API_KEY
+        sync: false  # Set this manually in Render dashboard  
+      - key: HUGGINGFACE_API_KEY
+        sync: false  # Set this manually in Render dashboard
+      - key: LOG_LEVEL
+        value: info
+      - key: YOUR_SITE_URL
+        fromService:
+          type: web
+          name: flowsprint-frontend
+          property: url

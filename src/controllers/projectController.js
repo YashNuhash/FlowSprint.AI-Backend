@@ -7,15 +7,31 @@ class ProjectController {
   // Create a new project
   async createProject(req, res) {
     try {
+      // LOG: Debug incoming request data (FlowSurf style comprehensive logging)
+      logger.info('🚀 CREATE PROJECT REQUEST RECEIVED');
+      logger.info('📋 Request Body:', JSON.stringify(req.body, null, 2));
+      logger.info('📊 Request Body Keys:', Object.keys(req.body));
+      logger.info('🔍 Request Body Size:', JSON.stringify(req.body).length, 'characters');
+
       const {
         name,
         description,
+        features = {},
+        techStack = [],
         type = 'web-app',
         industry = 'tech',
         complexity = 'medium',
         tags = [],
         collaborators = []
       } = req.body;
+
+      // LOG: Debug extracted data
+      logger.info('📋 CREATE PROJECT - Extracted data:');
+      logger.info(`Name: ${name}`);
+      logger.info(`Description: ${description}`);
+      logger.info(`Features: ${JSON.stringify(features)}`);
+      logger.info(`TechStack: ${JSON.stringify(techStack)}`);
+      logger.info(`Type: ${type}, Industry: ${industry}, Complexity: ${complexity}`);
 
       // Validation
       if (!name || !description) {
@@ -28,6 +44,8 @@ class ProjectController {
       const project = new Project({
         name: name.trim(),
         description: description.trim(),
+        features,
+        techStack,
         type,
         industry,
         complexity,
@@ -36,18 +54,88 @@ class ProjectController {
         createdBy: req.user?.id || 'anonymous'
       });
 
+      // LOG: Debug project data before saving
+      logger.info('💾 CREATE PROJECT - Project data before save:');
+      logger.info(JSON.stringify(project.toObject(), null, 2));
+
       await project.save();
 
-      logger.info('Project created successfully', {
+      // LOG: Debug project data after saving
+      logger.info('✅ CREATE PROJECT - Project saved successfully:');
+      logger.info(JSON.stringify(project.toObject(), null, 2));
+
+      logger.info('Project created successfully, generating mindmap...', {
         projectId: project._id,
         name: project.name,
+        features: Object.keys(features || {}).length,
+        techStack: (techStack || []).length,
         service: 'flowsprint-backend'
       });
 
+      // Automatically generate mindmap during project creation
+      try {
+        // Prepare detailed project data for AI generation
+        const featuresText = project.features && Object.keys(project.features).length > 0
+          ? Object.entries(project.features)
+              .map(([category, items]) => `${category}: ${Array.isArray(items) ? items.join(', ') : items}`)
+              .join('\n')
+          : 'Core functionality and user interface';
+          
+        const techStackText = project.techStack && project.techStack.length > 0
+          ? project.techStack.join(', ')
+          : 'React, Node.js, MongoDB';
+
+        const mindmapPrompt = `Create a detailed technical project mindmap for: ${project.name}
+
+Project Description: ${project.description}
+
+Features:
+${featuresText}
+
+Tech Stack: ${techStackText}
+
+Project Type: ${project.type}
+Industry: ${project.industry}
+Complexity: ${project.complexity}
+
+Generate a comprehensive development roadmap with specific technical tasks, implementation details, and all phases from setup to deployment and maintenance.`;
+
+        logger.info('🧠 Auto-generating mindmap during project creation:', {
+          projectId: project._id,
+          service: 'flowsprint-backend'
+        });
+
+        const result = await mcpGateway.routeMindmapRequest({
+          prompt: mindmapPrompt,
+          complexity: project.complexity,
+          project_type: project.type,
+          features: project.features,
+          techStack: project.techStack
+        });
+
+        if (result && result.data) {
+          await project.updateMindmap(result.data, result.provider);
+          logger.info('🎯 Auto-generated mindmap during project creation:', {
+            projectId: project._id,
+            provider: result.provider,
+            service: 'flowsprint-backend'
+          });
+        }
+      } catch (mindmapError) {
+        logger.warn('Auto-mindmap generation failed (project still created):', {
+          projectId: project._id,
+          error: mindmapError.message,
+          service: 'flowsprint-backend'
+        });
+      }
+
+      // Refresh project data to include generated mindmap
+      const finalProject = await Project.findById(project._id);
+
       res.status(201).json({
         success: true,
-        data: project,
-        message: 'Project created successfully'
+        data: finalProject,
+        message: 'Project created successfully with auto-generated mindmap'
       });
 
     } catch (error) {
@@ -263,21 +351,73 @@ class ProjectController {
         });
       }
 
-      // Use MCP Gateway for intelligent routing
-      const mindmapPrompt = `Create a detailed project mindmap for: ${project.name}
-Description: ${project.description}
-Type: ${project.type}
+      // Prepare detailed project data for AI generation
+      const featuresText = project.features && Object.keys(project.features).length > 0
+        ? Object.entries(project.features)
+            .map(([category, items]) => `${category}: ${Array.isArray(items) ? items.join(', ') : items}`)
+            .join('\n')
+        : 'Core functionality and user interface';
+        
+      const techStackText = project.techStack && project.techStack.length > 0
+        ? project.techStack.join(', ')
+        : 'React, Node.js, MongoDB';
+
+      // Use MCP Gateway for intelligent routing with comprehensive project data
+      const mindmapPrompt = `Create a detailed technical project mindmap for: ${project.name}
+
+Project Description: ${project.description}
+
+Features:
+${featuresText}
+
+Tech Stack: ${techStackText}
+
+Project Type: ${project.type}
 Industry: ${project.industry}
-Complexity: ${complexity}`;
+Complexity: ${complexity}
+
+Generate a comprehensive development roadmap with specific technical tasks, implementation details, and all phases from setup to deployment and maintenance.`;
+
+      logger.info('🧠 Starting mindmap generation:', {
+        projectId: project._id,
+        projectName: project.name,
+        featuresCount: Object.keys(project.features || {}).length,
+        techStackLength: (project.techStack || []).length,
+        service: 'flowsprint-backend'
+      });
 
       const result = await mcpGateway.routeMindmapRequest({
         prompt: mindmapPrompt,
         complexity,
-        project_type: project.type
+        project_type: project.type,
+        features: project.features,
+        techStack: project.techStack
       });
 
+      logger.info('🤖 AI Response received:', {
+        projectId: project._id,
+        provider: result.provider,
+        hasData: !!result.data,
+        dataType: typeof result.data,
+        dataLength: result.data ? JSON.stringify(result.data).length : 0,
+        responseTime: result.responseTime,
+        service: 'flowsprint-backend'
+      });
+
+      // Validate AI response
+      if (!result.data) {
+        throw new Error('AI service returned empty response');
+      }
+
       // Update project with generated mindmap
-      await project.updateMindmap(result.data, result.provider);
+      const updateResult = await project.updateMindmap(result.data, result.provider);
+      
+      logger.info('✅ Mindmap saved to database:', {
+        projectId: project._id,
+        mindmapSaved: !!updateResult.mindmap,
+        progressUpdated: updateResult.progress.mindmapCompleted,
+        service: 'flowsprint-backend'
+      });
 
       res.json({
         success: true,
